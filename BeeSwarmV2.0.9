@@ -13,23 +13,6 @@ if not player then
 	player = Players.LocalPlayer
 end
 
--- ==========================================
---    SYSTEM WERYFIKACJI UPRAWNIEŃ (WHITELIST)
--- ==========================================
-local ALLOWED_USERS = {
-	[123456789] = true, -- <-- WPISZ SWOJE USER ID TUTAJ
-	["xOJSON2plX"] = true -- <-- LUB SWÓJ NICK TUTAJ
-    ["oloaaaaa"] = true
-    ["olcaza1235"] = true
-}
-
-local function checkAccess()
-	if ALLOWED_USERS[player.UserId] or ALLOWED_USERS[player.Name] then
-		return true
-	end
-	return false
-end
-
 local function getSafeGuiParent()
 	local success, hui = pcall(function() return gethui and gethui() end)
 	if success and hui then return hui end
@@ -45,77 +28,6 @@ if not guiParent then return end
 for _, name in ipairs({"OjsonGrimMenu", "OjsonNotification", "OjsonLoadingGui", "OjsonAccessDenied"}) do
 	local old = guiParent:FindFirstChild(name)
 	if old then old:Destroy() end
-end
-
--- BLOKADA WSTRZYKNIĘCIA JEŚLI BRAK DOSTĘPU (Z PASKIEM CZASOWYM 6 SEKUND)
-if not checkAccess() then
-	local denyGui = Instance.new("ScreenGui")
-	denyGui.Name = "OjsonAccessDenied"
-	denyGui.ResetOnSpawn = false
-	denyGui.DisplayOrder = 999
-	denyGui.Parent = guiParent
-
-	local denyFrame = Instance.new("Frame")
-	denyFrame.Size = UDim2.new(0, 340, 0, 145)
-	denyFrame.Position = UDim2.new(0.5, -170, 0.5, -72)
-	denyFrame.BackgroundColor3 = Color3.fromRGB(15, 12, 22)
-	denyFrame.BackgroundTransparency = 0.2
-	denyFrame.BorderSizePixel = 0
-	denyFrame.Parent = denyGui
-	Instance.new("UICorner", denyFrame).CornerRadius = UDim.new(0, 16)
-
-	local denyStroke = Instance.new("UIStroke")
-	denyStroke.Color = Color3.fromRGB(239, 68, 68)
-	denyStroke.Thickness = 1.8
-	denyStroke.Parent = denyFrame
-
-	local denyTitle = Instance.new("TextLabel")
-	denyTitle.Size = UDim2.new(1, -24, 0, 28)
-	denyTitle.Position = UDim2.new(0, 12, 0, 16)
-	denyTitle.Text = "ACCESS DENIED"
-	denyTitle.TextColor3 = Color3.fromRGB(239, 68, 68)
-	denyTitle.Font = Enum.Font.GothamBold
-	denyTitle.TextSize = 15
-	denyTitle.BackgroundTransparency = 1
-	denyTitle.Parent = denyFrame
-
-	local denyDesc = Instance.new("TextLabel")
-	denyDesc.Size = UDim2.new(1, -24, 0, 48)
-	denyDesc.Position = UDim2.new(0, 12, 0, 46)
-	denyDesc.Text = "Nie masz uprawnień do uruchomienia Ojson Client.\nTwoje ID: " .. tostring(player.UserId)
-	denyDesc.TextColor3 = Color3.fromRGB(220, 215, 235)
-	denyDesc.Font = Enum.Font.GothamMedium
-	denyDesc.TextSize = 11
-	denyDesc.TextWrapped = true
-	denyDesc.BackgroundTransparency = 1
-	denyDesc.Parent = denyFrame
-
-	local barBg = Instance.new("Frame")
-	barBg.Size = UDim2.new(1, -24, 0, 4)
-	barBg.Position = UDim2.new(0, 12, 1, -18)
-	barBg.BackgroundColor3 = Color3.fromRGB(50, 30, 40)
-	barBg.BorderSizePixel = 0
-	barBg.Parent = denyFrame
-	Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
-
-	local barFill = Instance.new("Frame")
-	barFill.Size = UDim2.new(1, 0, 1, 0)
-	barFill.BackgroundColor3 = Color3.fromRGB(239, 68, 68)
-	barFill.BorderSizePixel = 0
-	barFill.Parent = barBg
-	Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
-
-	local duration = 6.0
-	TweenService:Create(barFill, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
-		Size = UDim2.new(0, 0, 1, 0)
-	}):Play()
-
-	task.delay(duration, function()
-		if denyGui and denyGui.Parent then
-			denyGui:Destroy()
-		end
-	end)
-	return
 end
 
 local vimAvailable, VirtualInputManager = pcall(function()

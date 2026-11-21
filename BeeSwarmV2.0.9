@@ -1,11 +1,13 @@
 -- ==========================================
--- [ Ojson Client ] 0.9 BETA - Bee Swarm Simulator (Auto Detect Max Pollen + Instant Teleport + Circle Farm + Sprinklers 1-7)
+-- [ Ojson Client ] 1.1 - Bee Swarm Simulator (Home Changelog + Auto Detect Max Pollen + Travel Fly 150 + Smooth Circle Farm + Sprinklers 1-7 + Chain Tokens)
 -- ==========================================
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 if not player then
@@ -53,9 +55,24 @@ local sprinklerKeyCodes = {
 local sprinklerSlotOptions = {"1", "2", "3", "4", "5", "6", "7"}
 
 local autoCollectTokensEnabled = false
+local circleRadius = 26
+local maxMoveRadiusFromCenter = 34
+local maxTokenOffsetFromCenter = 32
+local maxTravelDistanceFromCenter = 165
+local collectedTokenCooldowns = {}
+local lastGatherPulseTime = 0
+local lastMoveStepTime = 0
+local currentMoveTarget = nil
+
+local travelFlyEnabled = true
+local flySpeed = 150
+local savedCanCollide = {}
+local activeTravelTarget = nil
+local activeTravelKind = nil
+
 local infJumpEnabled = false
 local selectedField = "Dandelion Field"
-local farmWalkSpeed = 50
+local farmWalkSpeed = 48
 local menuOpen = false
 local isConverting = false
 
@@ -340,10 +357,6 @@ local function showDrawerInstant(drawer, show)
 	end
 end
 
-local function animateDrawer(drawer, open)
-	showDrawerInstant(drawer, open)
-end
-
 -- Panel listowy (GUI 2)
 rightDrawer = Instance.new("Frame")
 rightDrawer.Size = UDim2.new(0, 240, 0, 570)
@@ -526,9 +539,9 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- Panel ustawień Auto Farm (przycisk Field: ... + Max Pollen Limit + Save)
+-- Panel ustawień Auto Farm (Field + Travel Fly 150 toggle + Max Pollen Limit + Save)
 inputDrawer = Instance.new("Frame")
-inputDrawer.Size = UDim2.new(0, 240, 0, 174)
+inputDrawer.Size = UDim2.new(0, 240, 0, 212)
 inputDrawer.Position = UDim2.new(0.5, 478, 0.5, -285)
 inputDrawer.BackgroundColor3 = C_BG
 inputDrawer.BackgroundTransparency = 0.35
@@ -549,7 +562,7 @@ Instance.new("UICorner", idBlur).CornerRadius = UDim.new(0, 18)
 local idTitle = Instance.new("TextLabel")
 idTitle.Size = UDim2.new(1, -50, 0, 24)
 idTitle.Position = UDim2.new(0, 14, 0, 12)
-idTitle.Text = "Max Pollen Limit"
+idTitle.Text = "Auto Farm Settings"
 idTitle.TextColor3 = C_TEXT
 idTitle.Font = Enum.Font.GothamBold
 idTitle.TextSize = 13
@@ -574,8 +587,8 @@ idCloseBtn.MouseButton1Click:Connect(function()
 end)
 
 local fieldPickerBtn = Instance.new("TextButton")
-fieldPickerBtn.Size = UDim2.new(1, -28, 0, 32)
-fieldPickerBtn.Position = UDim2.new(0, 14, 0, 44)
+fieldPickerBtn.Size = UDim2.new(1, -28, 0, 30)
+fieldPickerBtn.Position = UDim2.new(0, 14, 0, 42)
 fieldPickerBtn.BackgroundColor3 = C_CARD
 fieldPickerBtn.BackgroundTransparency = 0.25
 fieldPickerBtn.Text = ""
@@ -601,9 +614,60 @@ fieldPickerLbl.BackgroundTransparency = 1
 fieldPickerLbl.ZIndex = 73
 fieldPickerLbl.Parent = fieldPickerBtn
 
+local travelFlyToggleBtn = Instance.new("TextButton")
+travelFlyToggleBtn.Size = UDim2.new(1, -28, 0, 30)
+travelFlyToggleBtn.Position = UDim2.new(0, 14, 0, 78)
+travelFlyToggleBtn.BackgroundColor3 = C_CARD
+travelFlyToggleBtn.BackgroundTransparency = 0.25
+travelFlyToggleBtn.Text = ""
+travelFlyToggleBtn.Active = true
+travelFlyToggleBtn.ZIndex = 72
+travelFlyToggleBtn.Parent = inputDrawer
+Instance.new("UICorner", travelFlyToggleBtn).CornerRadius = UDim.new(0, 8)
+
+local travelFlyStroke = Instance.new("UIStroke")
+travelFlyStroke.Color = travelFlyEnabled and C_ACCENT or C_STROKE
+travelFlyStroke.Thickness = travelFlyEnabled and 1.5 or 1.2
+travelFlyStroke.Parent = travelFlyToggleBtn
+
+local travelFlyLbl = Instance.new("TextLabel")
+travelFlyLbl.Size = UDim2.new(1, -16, 1, 0)
+travelFlyLbl.Position = UDim2.new(0, 10, 0, 0)
+travelFlyLbl.Text = "Travel Fly 150: " .. (travelFlyEnabled and "ON" or "OFF")
+travelFlyLbl.TextColor3 = travelFlyEnabled and C_ACCENT or C_TEXT
+travelFlyLbl.Font = Enum.Font.GothamBold
+travelFlyLbl.TextSize = 11
+travelFlyLbl.TextXAlignment = Enum.TextXAlignment.Left
+travelFlyLbl.BackgroundTransparency = 1
+travelFlyLbl.ZIndex = 73
+travelFlyLbl.Parent = travelFlyToggleBtn
+
+local function refreshTravelFlyUi()
+	travelFlyLbl.Text = "Travel Fly 150: " .. (travelFlyEnabled and "ON" or "OFF")
+	travelFlyLbl.TextColor3 = travelFlyEnabled and C_ACCENT or C_TEXT
+	travelFlyStroke.Color = travelFlyEnabled and C_ACCENT or C_STROKE
+	travelFlyStroke.Thickness = travelFlyEnabled and 1.5 or 1.2
+end
+
+travelFlyToggleBtn.MouseButton1Click:Connect(function()
+	travelFlyEnabled = not travelFlyEnabled
+	if not travelFlyEnabled then
+		activeTravelTarget = nil
+		activeTravelKind = nil
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if setCharacterNoclip then setCharacterNoclip(char, false) end
+		if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+		if hum then hum:ChangeState(Enum.HumanoidStateType.GettingUp) end
+	end
+	refreshTravelFlyUi()
+	showNotification("Travel Fly 150", travelFlyEnabled)
+end)
+
 local textBox = Instance.new("TextBox")
-textBox.Size = UDim2.new(1, -28, 0, 34)
-textBox.Position = UDim2.new(0, 14, 0, 84)
+textBox.Size = UDim2.new(1, -28, 0, 32)
+textBox.Position = UDim2.new(0, 14, 0, 114)
 textBox.BackgroundColor3 = C_CARD
 textBox.BackgroundTransparency = 0.3
 textBox.Text = "Auto"
@@ -616,7 +680,7 @@ Instance.new("UICorner", textBox).CornerRadius = UDim.new(0, 8)
 
 local confirmBtn = Instance.new("TextButton")
 confirmBtn.Size = UDim2.new(1, -28, 0, 30)
-confirmBtn.Position = UDim2.new(0, 14, 0, 126)
+confirmBtn.Position = UDim2.new(0, 14, 0, 154)
 confirmBtn.BackgroundColor3 = C_ACCENT
 confirmBtn.BackgroundTransparency = 0.2
 confirmBtn.Text = "Save"
@@ -722,12 +786,13 @@ fieldPickerBtn.MouseButton1Click:Connect(function()
 		fieldPickerLbl.Text = "Field: " .. selectedField
 		showNotification("Field: " .. selectedField, nil)
 		showDrawerInstant(rightDrawer, false)
+		refreshTravelFlyUi()
 		showDrawerInstant(inputDrawer, true)
 	end)
 end)
 
 -- ==========================================
---    SIDEBAR (Z KWADRATOWYM LOGO "G")
+--    SIDEBAR (Z KWADRATOWYM LOGO "G" + HOME ODDZIELONY OD RESZTY)
 -- ==========================================
 local sidebar = Instance.new("Frame")
 sidebar.Size = UDim2.new(0, 200, 1, 0)
@@ -776,7 +841,7 @@ brandTitle.Parent = brandCard
 local brandVer = Instance.new("TextLabel")
 brandVer.Size = UDim2.new(1, -44, 0, 16)
 brandVer.Position = UDim2.new(0, 44, 0, 26)
-brandVer.Text = "Version: 0.9 BETA"
+brandVer.Text = "Version: 1.1"
 brandVer.TextColor3 = C_TEXT_MUTED
 brandVer.Font = Enum.Font.GothamMedium
 brandVer.TextSize = 10
@@ -785,9 +850,27 @@ brandVer.BackgroundTransparency = 1
 brandVer.ZIndex = 2
 brandVer.Parent = brandCard
 
+-- Zakładka HOME na samej górze (oddzielona od reszty)
+local homeNavContainer = Instance.new("Frame")
+homeNavContainer.Size = UDim2.new(1, 0, 0, 38)
+homeNavContainer.Position = UDim2.new(0, 0, 0, 74)
+homeNavContainer.BackgroundTransparency = 1
+homeNavContainer.ZIndex = 2
+homeNavContainer.Parent = sidebar
+
+-- Subtelna kreska oddzielająca Home od reszty zakładek
+local sidebarDivider = Instance.new("Frame")
+sidebarDivider.Size = UDim2.new(1, -32, 0, 1)
+sidebarDivider.Position = UDim2.new(0, 16, 0, 122)
+sidebarDivider.BackgroundColor3 = C_STROKE
+sidebarDivider.BackgroundTransparency = 0.45
+sidebarDivider.BorderSizePixel = 0
+sidebarDivider.ZIndex = 2
+sidebarDivider.Parent = sidebar
+
 local featuresLabel = Instance.new("TextLabel")
 featuresLabel.Size = UDim2.new(1, -20, 0, 20)
-featuresLabel.Position = UDim2.new(0, 16, 0, 76)
+featuresLabel.Position = UDim2.new(0, 16, 0, 134)
 featuresLabel.Text = "FEATURES"
 featuresLabel.TextColor3 = Color3.fromRGB(120, 110, 140)
 featuresLabel.BackgroundTransparency = 1
@@ -798,8 +881,8 @@ featuresLabel.ZIndex = 2
 featuresLabel.Parent = sidebar
 
 local navContainer = Instance.new("Frame")
-navContainer.Size = UDim2.new(1, 0, 1, -170)
-navContainer.Position = UDim2.new(0, 0, 0, 100)
+navContainer.Size = UDim2.new(1, 0, 1, -228)
+navContainer.Position = UDim2.new(0, 0, 0, 158)
 navContainer.BackgroundTransparency = 1
 navContainer.ZIndex = 2
 navContainer.Parent = sidebar
@@ -884,7 +967,7 @@ Instance.new("UICorner", topBarCard).CornerRadius = UDim.new(0, 12)
 local activeCategoryLabel = Instance.new("TextLabel")
 activeCategoryLabel.Size = UDim2.new(1, -32, 1, 0)
 activeCategoryLabel.Position = UDim2.new(0, 16, 0, 0)
-activeCategoryLabel.Text = "Combat / Farm  •  Active settings"
+activeCategoryLabel.Text = "Home  •  Update 1.1 & Changelog"
 activeCategoryLabel.TextColor3 = C_TEXT
 activeCategoryLabel.BackgroundTransparency = 1
 activeCategoryLabel.Font = Enum.Font.GothamBold
@@ -899,6 +982,133 @@ tabsHolder.Position = UDim2.new(0, 14, 0, 72)
 tabsHolder.BackgroundTransparency = 1
 tabsHolder.ZIndex = 2
 tabsHolder.Parent = contentArea
+
+-- Zakładka HOME (domyślnie aktywna po starcie)
+local homeTab = Instance.new("ScrollingFrame")
+homeTab.Size = UDim2.new(1, 0, 1, 0)
+homeTab.BackgroundTransparency = 1
+homeTab.Visible = true
+homeTab.CanvasSize = UDim2.new(0, 0, 0, 440)
+homeTab.ScrollBarThickness = 3
+homeTab.ZIndex = 2
+homeTab.Parent = tabsHolder
+
+local homeListLayout = Instance.new("UIListLayout")
+homeListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+homeListLayout.Padding = UDim.new(0, 10)
+homeListLayout.Parent = homeTab
+
+-- Karta nagłówkowa Update 1.1 w zakładce Home
+local updateBannerCard = Instance.new("Frame")
+updateBannerCard.Size = UDim2.new(1, -6, 0, 76)
+updateBannerCard.BackgroundColor3 = C_CARD
+updateBannerCard.BackgroundTransparency = 0.25
+updateBannerCard.LayoutOrder = 1
+updateBannerCard.ZIndex = 2
+updateBannerCard.Parent = homeTab
+Instance.new("UICorner", updateBannerCard).CornerRadius = UDim.new(0, 14)
+
+local ubStroke = Instance.new("UIStroke")
+ubStroke.Color = C_ACCENT
+ubStroke.Thickness = 1.6
+ubStroke.Parent = updateBannerCard
+
+local ubBadge = Instance.new("Frame")
+ubBadge.Size = UDim2.new(0, 88, 0, 22)
+ubBadge.Position = UDim2.new(0, 16, 0, 12)
+ubBadge.BackgroundColor3 = C_ACCENT
+ubBadge.ZIndex = 3
+ubBadge.Parent = updateBannerCard
+Instance.new("UICorner", ubBadge).CornerRadius = UDim.new(0, 6)
+
+local ubBadgeText = Instance.new("TextLabel")
+ubBadgeText.Size = UDim2.new(1, 0, 1, 0)
+ubBadgeText.BackgroundTransparency = 1
+ubBadgeText.Text = "UPDATE 1.1"
+ubBadgeText.TextColor3 = C_TEXT
+ubBadgeText.Font = Enum.Font.GothamBold
+ubBadgeText.TextSize = 10
+ubBadgeText.ZIndex = 4
+ubBadgeText.Parent = ubBadge
+
+local ubTitle = Instance.new("TextLabel")
+ubTitle.Size = UDim2.new(1, -124, 0, 22)
+ubTitle.Position = UDim2.new(0, 114, 0, 12)
+ubTitle.Text = "Ojson Client — Bee Swarm Simulator"
+ubTitle.TextColor3 = C_TEXT
+ubTitle.Font = Enum.Font.GothamBold
+ubTitle.TextSize = 13
+ubTitle.TextXAlignment = Enum.TextXAlignment.Left
+ubTitle.BackgroundTransparency = 1
+ubTitle.ZIndex = 3
+ubTitle.Parent = updateBannerCard
+
+local ubSub = Instance.new("TextLabel")
+ubSub.Size = UDim2.new(1, -32, 0, 24)
+ubSub.Position = UDim2.new(0, 16, 0, 42)
+ubSub.Text = "Najnowsza aktualizacja skryptu: płynny ruch po polu, przelot 150 + noclip do Hive i Field oraz zintegrowane ustawienia."
+ubSub.TextColor3 = C_TEXT_MUTED
+ubSub.Font = Enum.Font.GothamMedium
+ubSub.TextSize = 11
+ubSub.TextXAlignment = Enum.TextXAlignment.Left
+ubSub.TextWrapped = true
+ubSub.BackgroundTransparency = 1
+ubSub.ZIndex = 3
+ubSub.Parent = updateBannerCard
+
+local function createChangelogCard(order, titleText, descText)
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(1, -6, 0, 56)
+	card.BackgroundColor3 = C_CARD
+	card.BackgroundTransparency = 0.35
+	card.LayoutOrder = order
+	card.ZIndex = 2
+	card.Parent = homeTab
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = C_STROKE
+	stroke.Thickness = 1.2
+	stroke.Parent = card
+
+	local dot = Instance.new("Frame")
+	dot.Size = UDim2.new(0, 8, 0, 8)
+	dot.Position = UDim2.new(0, 14, 0, 15)
+	dot.BackgroundColor3 = C_ACCENT
+	dot.BorderSizePixel = 0
+	dot.ZIndex = 3
+	dot.Parent = card
+	Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+	local tLbl = Instance.new("TextLabel")
+	tLbl.Size = UDim2.new(1, -40, 0, 18)
+	tLbl.Position = UDim2.new(0, 30, 0, 10)
+	tLbl.Text = titleText
+	tLbl.TextColor3 = C_TEXT
+	tLbl.Font = Enum.Font.GothamBold
+	tLbl.TextSize = 12
+	tLbl.TextXAlignment = Enum.TextXAlignment.Left
+	tLbl.BackgroundTransparency = 1
+	tLbl.ZIndex = 3
+	tLbl.Parent = card
+
+	local dLbl = Instance.new("TextLabel")
+	dLbl.Size = UDim2.new(1, -40, 0, 18)
+	dLbl.Position = UDim2.new(0, 30, 0, 30)
+	dLbl.Text = descText
+	dLbl.TextColor3 = C_TEXT_MUTED
+	dLbl.Font = Enum.Font.GothamMedium
+	dLbl.TextSize = 10
+	dLbl.TextXAlignment = Enum.TextXAlignment.Left
+	dLbl.BackgroundTransparency = 1
+	dLbl.ZIndex = 3
+	dLbl.Parent = card
+end
+
+createChangelogCard(2, "[+] Travel Fly 150 + Noclip (Hive <-> Field)", "Zamiast sztywnego teleportu postać leci z prędkością 150 przez przeszkody do ula i na pole (przełącznik w Auto Farm Field ...).")
+createChangelogCard(3, "[+] Płynne kółko bez wycinania dziury", "Szerszy promień okręgu (26 studów), ciągłe odświeżanie ruchu bez zatrzymywania i rzadsze impulsy zbierania.")
+createChangelogCard(4, "[+] Konfiguracja Auto Farm Field (...)", "Wybór pola, przełącznik Travel Fly 150 oraz limit pyłku (Auto lub własna liczba) w jednym bocznym panelu.")
+createChangelogCard(5, "[+] Auto Use Sprinklers (1-7) & Chain Tokens", "Automatyczne stawianie zraszaczy pod wybranym slotem 1-7 po przylocie na pole oraz zbieranie tokenów w obrębie okręgu.")
 
 local function createTabContentFrame()
 	local sf = Instance.new("ScrollingFrame")
@@ -919,21 +1129,24 @@ local function createTabContentFrame()
 end
 
 local combatTab = createTabContentFrame()
-combatTab.Visible = true
 local movementTab = createTabContentFrame()
 local configTab = createTabContentFrame()
 local otherTab = createTabContentFrame()
 
 local tabButtons = {}
-local function createNavButton(name, order, targetTab)
-	local isActive = (targetTab == combatTab)
+local function createNavButton(name, order, targetTab, subtitleText, customParent)
+	local isActive = (targetTab == homeTab)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(1, -20, 0, 38)
-	btn.BackgroundTransparency = 1
+	if customParent then
+		btn.Position = UDim2.new(0, 10, 0, 0)
+	end
+	btn.BackgroundColor3 = C_CARD
+	btn.BackgroundTransparency = isActive and 0.35 or 1
 	btn.Text = ""
 	btn.LayoutOrder = order
 	btn.ZIndex = 2
-	btn.Parent = navContainer
+	btn.Parent = customParent or navContainer
 	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
 
 	local lbl = Instance.new("TextLabel")
@@ -951,28 +1164,35 @@ local function createNavButton(name, order, targetTab)
 	tabButtons[targetTab] = {Button = btn, Label = lbl}
 
 	btn.MouseButton1Click:Connect(function()
+		homeTab.Visible = false
 		combatTab.Visible = false
 		movementTab.Visible = false
 		configTab.Visible = false
 		otherTab.Visible = false
 
 		targetTab.Visible = true
-		activeCategoryLabel.Text = name .. "  •  Active settings"
+		activeCategoryLabel.Text = name .. "  •  " .. (subtitleText or "Active settings")
 
 		for t, tbl in pairs(tabButtons) do
 			if t == targetTab then
 				TweenService:Create(tbl.Label, TweenInfo.new(0.2), {TextColor3 = C_ACCENT}):Play()
+				TweenService:Create(tbl.Button, TweenInfo.new(0.2), {BackgroundTransparency = 0.35}):Play()
 			else
 				TweenService:Create(tbl.Label, TweenInfo.new(0.2), {TextColor3 = C_TEXT}):Play()
+				TweenService:Create(tbl.Button, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
 			end
 		end
 	end)
 end
 
-createNavButton("Combat / Farm", 1, combatTab)
-createNavButton("Movement", 2, movementTab)
-createNavButton("Field & Hive", 3, configTab)
-createNavButton("Other", 4, otherTab)
+-- Zakładka Home na samej górze w osobnym kontenerze
+createNavButton("Home", 0, homeTab, "Update 1.1 & Changelog", homeNavContainer)
+
+-- Reszta zakładek niżej po odstępie
+createNavButton("Combat / Farm", 1, combatTab, "Active settings")
+createNavButton("Movement", 2, movementTab, "Active settings")
+createNavButton("Field & Hive", 3, configTab, "Active settings")
+createNavButton("Other", 4, otherTab, "Active settings")
 
 local function createFeatureCard(title, desc, defaultState, callback, parent)
 	local card = Instance.new("TextButton")
@@ -1031,7 +1251,7 @@ local function createFeatureCard(title, desc, defaultState, callback, parent)
 	end)
 end
 
-local function createToggleDropdownCard(title, desc, currentVal, optionsList, defaultState, onToggle, onSelect, parent)
+local function createToggleDropdownCard(title, desc, currentVal, optionsList, defaultState, onToggle, onSelect, parent, drawerTitle)
 	local card = Instance.new("TextButton")
 	card.Size = UDim2.new(0, 345, 0, 64)
 	card.BackgroundColor3 = C_CARD
@@ -1123,7 +1343,7 @@ local function createToggleDropdownCard(title, desc, currentVal, optionsList, de
 	end)
 
 	dotsBtn.MouseButton1Click:Connect(function()
-		openRightDrawer(title .. " Key (1-7)", optionsList, chosenVal, function(chosen)
+		openRightDrawer(drawerTitle or (title .. " Key (1-7)"), optionsList, chosenVal, function(chosen)
 			chosenVal = chosen
 			titleLbl.Text = title .. " [" .. tostring(chosenVal) .. "]"
 			onSelect(chosen)
@@ -1227,6 +1447,7 @@ local function createToggleInputCard(title, desc, currentVal, defaultState, onTo
 	dotsBtn.MouseButton1Click:Connect(function()
 		showDrawerInstant(rightDrawer, false)
 		showDrawerInstant(sliderDrawer, false)
+		refreshTravelFlyUi()
 		showDrawerInstant(inputDrawer, true)
 		fieldPickerLbl.Text = "Field: " .. selectedField
 		textBox.Text = autoDetectMax and "Auto" or tostring(maxPollenLimit)
@@ -1345,11 +1566,84 @@ local function createToggleSliderCard(title, desc, minVal, maxVal, currentVal, d
 end
 
 -- ==========================================
+--    LOGIKA LOTU 150 + NOCLIP (TRASY HIVE & FIELD)
+-- ==========================================
+function setCharacterNoclip(char, enabled)
+	if not char then return end
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			if enabled then
+				if savedCanCollide[part] == nil then
+					savedCanCollide[part] = part.CanCollide
+				end
+				part.CanCollide = false
+			else
+				if savedCanCollide[part] ~= nil then
+					part.CanCollide = savedCanCollide[part]
+					savedCanCollide[part] = nil
+				end
+			end
+		end
+	end
+end
+
+local function stepFlyTowards(targetPos, dt)
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum then return false end
+
+	setCharacterNoclip(char, true)
+	hum:ChangeState(Enum.HumanoidStateType.Physics)
+
+	local delta = targetPos - hrp.Position
+	local dist = delta.Magnitude
+	local step = flySpeed * dt
+
+	if dist <= math.max(step, 3.5) then
+		hrp.CFrame = CFrame.new(targetPos)
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		setCharacterNoclip(char, false)
+		hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+		return true
+	end
+
+	local dir = delta.Unit
+	hrp.AssemblyLinearVelocity = dir * flySpeed
+	hrp.CFrame = hrp.CFrame + (dir * math.min(step, dist))
+	return false
+end
+
+local function flyTravelAndWait(targetPos, kind)
+	activeTravelTarget = targetPos
+	activeTravelKind = kind
+
+	local timeoutStart = os.clock()
+	while autoFarmEnabled and activeTravelTarget ~= nil and (os.clock() - timeoutStart) < 15 do
+		task.wait(0.03)
+	end
+
+	activeTravelTarget = nil
+	activeTravelKind = nil
+
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	setCharacterNoclip(char, false)
+	if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+	if hum then hum:ChangeState(Enum.HumanoidStateType.GettingUp) end
+end
+
+-- ==========================================
 --    ELEMENTY W ZAKŁADKACH
 -- ==========================================
-createToggleInputCard("Auto Farm Field", "Auto detects max pollen & farms", maxPollenLimit, autoFarmEnabled, function(s)
+createToggleInputCard("Auto Farm Field", "Smooth circle + fly 150 to Hive/Field", maxPollenLimit, autoFarmEnabled, function(s)
 	autoFarmEnabled = s
 	if not s then
+		activeTravelTarget = nil
+		activeTravelKind = nil
+		currentMoveTarget = nil
+		setCharacterNoclip(player.Character, false)
 		setClientStatus("Ojson Client")
 	end
 end, function(val)
@@ -1375,6 +1669,13 @@ createToggleDropdownCard("Auto Use Sprinklers", "Presses sprinkler slot (1-7)", 
 end, function(chosenSlot)
 	sprinklerSlot = tostring(chosenSlot)
 	showNotification("Sprinkler Slot: " .. sprinklerSlot, nil)
+end, combatTab, "Sprinkler Slot (1-7)")
+
+createFeatureCard("Auto Collect Tokens", "Chains tokens in wide circle smoothly", autoCollectTokensEnabled, function(s)
+	autoCollectTokensEnabled = s
+	if not s then
+		table.clear(collectedTokenCooldowns)
+	end
 end, combatTab)
 
 createFeatureCard("Infinite Jump", "Jump repeatedly in mid-air", infJumpEnabled, function(s)
@@ -1552,7 +1853,7 @@ loadTitle.Parent = loadFrame
 local loadStatus = Instance.new("TextLabel")
 loadStatus.Size = UDim2.new(1, 0, 0, 20)
 loadStatus.Position = UDim2.new(0, 0, 0, 98)
-loadStatus.Text = "Launching in 5s..."
+loadStatus.Text = "Skrypt wlaczy sie za 5s..."
 loadStatus.TextColor3 = Color3.fromRGB(80, 75, 95)
 loadStatus.Font = Enum.Font.GothamMedium
 loadStatus.TextSize = 11
@@ -1582,13 +1883,13 @@ Instance.new("UICorner", progressBarFill).CornerRadius = UDim.new(1, 0)
 task.spawn(function()
 	local totalTime = 5
 	for i = totalTime, 1, -1 do
-		if loadStatus then loadStatus.Text = "Launching in " .. i .. "s..." end
+		if loadStatus then loadStatus.Text = "Skrypt wlaczy sie za " .. i .. "s..." end
 		TweenService:Create(progressBarFill, TweenInfo.new(1, Enum.EasingStyle.Linear), {
 			Size = UDim2.new((totalTime - i + 1) / totalTime, 0, 1, 0)
 		}):Play()
 		task.wait(1)
 	end
-	if loadStatus then loadStatus.Text = "Ready!" end
+	if loadStatus then loadStatus.Text = "Gotowe!" end
 	task.wait(0.3)
 
 	if loadPulseTween then loadPulseTween:Cancel() end
@@ -1610,7 +1911,7 @@ task.spawn(function()
 end)
 
 -- ==========================================
---    LOGIKA GRY (TŁO) - AUTO DETECT MAX + TELEPORT + KRĘCENIE + SPRINKLERS 1-7
+--    LOGIKA GRY (TŁO)
 -- ==========================================
 UserInputService.InputBegan:Connect(function(input, gpe)
 	if gpe then return end
@@ -1656,13 +1957,34 @@ local function getPollenData()
 	return pVal, mVal
 end
 
-local function teleportTo(targetVector)
-	local char = player.Character
-	if not char or not char:FindFirstChild("HumanoidRootPart") then return end
-	local hrp = char.HumanoidRootPart
-	hrp.Anchored = false
-	hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-	hrp.CFrame = CFrame.new(targetVector)
+local function clampPointToField(centerPos, desiredPos, maxRadius)
+	local flatCenter = Vector3.new(centerPos.X, 0, centerPos.Z)
+	local flatDesired = Vector3.new(desiredPos.X, 0, desiredPos.Z)
+	local delta = flatDesired - flatCenter
+	local dist = delta.Magnitude
+	if dist > maxRadius and dist > 0.001 then
+		flatDesired = flatCenter + delta.Unit * maxRadius
+	end
+	return Vector3.new(flatDesired.X, desiredPos.Y, flatDesired.Z)
+end
+
+local function gatherStep(char)
+	local now = os.clock()
+	if (now - lastGatherPulseTime) < 0.38 then return end
+	lastGatherPulseTime = now
+
+	pcall(function()
+		local tool = char and char:FindFirstChildOfClass("Tool")
+		if tool and tool.Activate then
+			tool:Activate()
+		end
+
+		local eventsFolder = ReplicatedStorage:FindFirstChild("Events")
+		local toolCollect = eventsFolder and eventsFolder:FindFirstChild("ToolCollect")
+		if toolCollect and toolCollect:IsA("RemoteEvent") then
+			toolCollect:FireServer("e_lol")
+		end
+	end)
 end
 
 local lastSprinklerTime = 0
@@ -1687,12 +2009,74 @@ local function tryPlaceSprinkler(force)
 	end)
 end
 
-local function runAutoFarmExtras(targetPos, hrp, hum)
-	if autoCollectTokensEnabled then
-		-- Zarezerwowane pod moduł Auto Collect Tokens
+local function findNearestTokenInCircle(centerPos, hrp)
+	local bestTargetPos = nil
+	local bestDist = maxTokenOffsetFromCenter
+	local collectiblesFolder = Workspace:FindFirstChild("Collectibles")
+	if not collectiblesFolder then return nil end
+
+	local now = os.clock()
+	for tokenObj, expiry in pairs(collectedTokenCooldowns) do
+		if not tokenObj or not tokenObj.Parent or now >= expiry then
+			collectedTokenCooldowns[tokenObj] = nil
+		end
 	end
+
+	local flatCenter = Vector3.new(centerPos.X, 0, centerPos.Z)
+	local flatPlayer = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
+
+	for _, item in ipairs(collectiblesFolder:GetChildren()) do
+		if not collectedTokenCooldowns[item] then
+			local part = item:IsA("BasePart") and item or (item:IsA("Model") and (item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")))
+			if part and part.Parent and part.Transparency < 0.95 then
+				local ownerTag = item:FindFirstChild("PlayerName") or item:FindFirstChild("Owner")
+				local ownedByOther = false
+				if ownerTag and ownerTag:IsA("StringValue") and ownerTag.Value ~= "" and ownerTag.Value ~= player.Name then
+					ownedByOther = true
+				end
+
+				if not ownedByOther then
+					local flatPart = Vector3.new(part.Position.X, 0, part.Position.Z)
+					local distFromCenter = (flatPart - flatCenter).Magnitude
+					local distFromPlayer = (flatPart - flatPlayer).Magnitude
+
+					if distFromPlayer <= 4.5 and math.abs(part.Position.Y - hrp.Position.Y) <= 8 then
+						collectedTokenCooldowns[item] = now + 0.45
+					elseif distFromCenter <= maxTokenOffsetFromCenter and distFromPlayer < bestDist then
+						bestDist = distFromPlayer
+						local rawTarget = Vector3.new(part.Position.X, hrp.Position.Y, part.Position.Z)
+						bestTargetPos = clampPointToField(centerPos, rawTarget, maxMoveRadiusFromCenter)
+					end
+				end
+			end
+		end
+	end
+
+	return bestTargetPos
 end
 
+local function runAutoFarmExtras(centerPos, hrp, hum)
+	if autoCollectTokensEnabled then
+		local tokenTarget = findNearestTokenInCircle(centerPos, hrp)
+		if tokenTarget then
+			hum:MoveTo(tokenTarget)
+			return true
+		end
+	end
+	return false
+end
+
+-- Pętla lotu 150 + noclip (tylko na trasach do Hive i na Field)
+RunService.Heartbeat:Connect(function(dt)
+	if activeTravelTarget then
+		local reached = stepFlyTowards(activeTravelTarget, dt)
+		if reached then
+			activeTravelTarget = nil
+		end
+	end
+end)
+
+-- Pętla konwersji miodu i przelotów Hive <-> Field
 task.spawn(function()
 	while task.wait(0.4) do
 		local curr, maxDetected = getPollenData()
@@ -1701,10 +2085,19 @@ task.spawn(function()
 		if autoFarmEnabled then
 			if curr >= activeLimit and hivePosition and not isConverting then
 				isConverting = true
+				currentMoveTarget = nil
 				setClientStatus("put honey in the hive")
-				showNotification("Backpack Full! Teleporting", nil)
+				showNotification("Backpack Full! Flying 150 to Hive", nil)
 
-				teleportTo(hivePosition.Position + Vector3.new(0, 3, 0))
+				local hiveTarget = hivePosition.Position + Vector3.new(0, 3, 0)
+				if travelFlyEnabled then
+					flyTravelAndWait(hiveTarget, "to_hive")
+				else
+					local char = player.Character
+					if char and char:FindFirstChild("HumanoidRootPart") then
+						char.HumanoidRootPart.CFrame = CFrame.new(hiveTarget)
+					end
+				end
 
 				task.wait(0.8)
 				if vimAvailable then
@@ -1718,12 +2111,20 @@ task.spawn(function()
 					setClientStatus("put honey in the hive")
 					task.wait(1)
 				end
-				showNotification("Empty! Teleporting to Field", nil)
-				task.wait(0.5)
+				showNotification("Empty! Flying 150 to Field", nil)
+				task.wait(0.3)
 
 				local targetFieldVec = fieldPositions[selectedField]
 				if targetFieldVec then
-					teleportTo(targetFieldVec + Vector3.new(0, 3, 0))
+					local fieldTarget = targetFieldVec + Vector3.new(0, 3, 0)
+					if travelFlyEnabled then
+						flyTravelAndWait(fieldTarget, "to_field")
+					else
+						local char = player.Character
+						if char and char:FindFirstChild("HumanoidRootPart") then
+							char.HumanoidRootPart.CFrame = CFrame.new(fieldTarget)
+						end
+					end
 					task.wait(0.2)
 					tryPlaceSprinkler(true)
 				end
@@ -1736,10 +2137,11 @@ task.spawn(function()
 	end
 end)
 
+-- Pętla płynnego ruchu po polu, zbierania i tokenów
 task.spawn(function()
 	local angle = 0
 	while task.wait(0.05) do
-		if autoFarmEnabled and not isConverting then
+		if autoFarmEnabled and not isConverting and not activeTravelTarget then
 			local char = player.Character
 			if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChildOfClass("Humanoid") then
 				local hrp = char.HumanoidRootPart
@@ -1747,10 +2149,15 @@ task.spawn(function()
 				local targetPos = fieldPositions[selectedField]
 
 				if targetPos then
-					if (hrp.Position - targetPos).Magnitude > 65 then
-						teleportTo(targetPos + Vector3.new(0, 3, 0))
-						task.wait(0.15)
-						tryPlaceSprinkler(true)
+					if (hrp.Position - targetPos).Magnitude > maxTravelDistanceFromCenter then
+						currentMoveTarget = nil
+						if travelFlyEnabled then
+							flyTravelAndWait(targetPos + Vector3.new(0, 3, 0), "to_field")
+							tryPlaceSprinkler(true)
+						else
+							hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+							tryPlaceSprinkler(true)
+						end
 					else
 						if hrp.Anchored then hrp.Anchored = false end
 						if not walkSpeedEnabled then
@@ -1762,16 +2169,44 @@ task.spawn(function()
 							hum.JumpPower = customJumpPower
 						end
 
-						angle = angle + 0.08
-						local radius = 18
-						local offsetX = math.cos(angle) * radius
-						local offsetZ = math.sin(angle) * radius
-						hum:MoveTo(targetPos + Vector3.new(offsetX, 0, offsetZ))
+						gatherStep(char)
 
-						runAutoFarmExtras(targetPos, hrp, hum)
+						local movedToToken = runAutoFarmExtras(targetPos, hrp, hum)
+						if not movedToToken then
+							local now = os.clock()
+							if not currentMoveTarget or (now - lastMoveStepTime) >= 0.30 then
+								lastMoveStepTime = now
+								angle = angle + 0.5
+								local jitter = math.random(-2, 2)
+								local r = math.max(10, circleRadius + jitter)
+								local offsetX = math.cos(angle) * r
+								local offsetZ = math.sin(angle) * r
+								currentMoveTarget = clampPointToField(
+									targetPos,
+									Vector3.new(targetPos.X + offsetX, hrp.Position.Y, targetPos.Z + offsetZ),
+									maxMoveRadiusFromCenter
+								)
+							end
+							hum:MoveTo(currentMoveTarget)
+						else
+							currentMoveTarget = nil
+						end
 					end
 				end
 			end
+		elseif autoCollectTokensEnabled and not isConverting and not activeTravelTarget then
+			local char = player.Character
+			if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChildOfClass("Humanoid") then
+				local hrp = char.HumanoidRootPart
+				local hum = char.Humanoid
+				local anchor = fieldPositions[selectedField] or hrp.Position
+				local tokenTarget = findNearestTokenInCircle(anchor, hrp)
+				if tokenTarget then
+					hum:MoveTo(tokenTarget)
+				end
+			end
+		elseif not autoFarmEnabled then
+			currentMoveTarget = nil
 		end
 	end
 end)
@@ -1779,7 +2214,7 @@ end)
 task.spawn(function()
 	while task.wait(0.15) do
 		local char = player.Character
-		if char and char:FindFirstChildOfClass("Humanoid") and not autoFarmEnabled then
+		if char and char:FindFirstChild("Humanoid") and not autoFarmEnabled and not activeTravelTarget then
 			local hum = char.Humanoid
 			if walkSpeedEnabled then hum.WalkSpeed = customWalkSpeed end
 			if jumpPowerEnabled then hum.JumpPower = customJumpPower end
